@@ -1,9 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+
+	_ "github.com/lib/pq"
 )
 
 func cors(next http.Handler) http.Handler {
@@ -21,20 +25,33 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
-func Read(w http.ResponseWriter, r *http.Request) {
-	type todo struct {
+func Read(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	type Todo struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	}
 
-	response := []todo{
-		{ID: 1, Name: "Listen to Lady Gaga!"},
+	rows, err := db.Query("SELECT * FROM t_todos")
+	if err != nil {
+		http.Error(w, "Error running the DB query", http.StatusInternalServerError)
+	}
+
+	defer rows.Close()
+
+	var todos []Todo
+
+	for rows.Next() {
+		var todo Todo
+		if err := rows.Scan(&todo.ID, &todo.Name); err != nil {
+			http.Error(w, "Error scanning the returned rows", http.StatusInternalServerError)
+			return
+		}
+		todos = append(todos, todo)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 
-	if err := json.NewEncoder(w).Encode(response); err != nil {
+	if err := json.NewEncoder(w).Encode(todos); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 }
@@ -52,15 +69,32 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /todos/read", Read)
-	mux.HandleFunc("POST /todos/create", Create)
-	mux.HandleFunc("DELETE /todos/delete/{id}", Delete)
+	connStr := "postgresql://<username>:<password>@<database_ip:port/database_name>?sslmode=disable"
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		fmt.Println("Error connecting to database: ", err)
+		log.Fatal(err)
+	}
+
+	defer db.Close()
+
+	if err = db.Ping(); err != nil {
+		log.Fatal("Database is not reachable", err)
+	}
 
 	wrappedMux := cors(mux)
 
+	mux.HandleFunc("GET /todos/read", func(w http.ResponseWriter, r *http.Request) {
+		Read(w, r, db)
+	})
+	mux.HandleFunc("POST /todos/create", Create)
+	mux.HandleFunc("DELETE /todos/delete/{id}", Delete)
+
 	fmt.Println("Server running at port :5000")
-	err := http.ListenAndServe(":5000", wrappedMux)
-	if err != nil {
+
+	if err := http.ListenAndServe(":5000", wrappedMux); err != nil {
 		fmt.Println("Error starting server: ", err)
 	}
+
 }
