@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	_ "github.com/lib/pq"
 )
@@ -56,13 +57,80 @@ func Read(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 }
 
-func Create(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "New todo created!")
+func Create(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	payload := struct {
+		Name string `json:"name"`
+	}{}
+
+	type res struct {
+		Res bool `json:"res"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&payload)
+	if err != nil {
+		panic(err)
+	}
+
+	query := fmt.Sprintf("INSERT INTO t_todos (name) VALUES ('%s')", payload.Name)
+	if _, err := db.Exec(query); err != nil {
+		http.Error(w, "Error when executing query", http.StatusInternalServerError)
+	}
+
+	result := []res{
+		{Res: true},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		http.Error(w, "Error encoding JSON response", http.StatusInternalServerError)
+		log.Println("Error encoding JSON response:", err)
+		return
+	}
+
 }
 
-func Delete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	fmt.Fprintln(w, "Todo deleted: ", id)
+func Delete(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	type res struct {
+		Res bool `json:"res"`
+	}
+
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		response := map[string]string{"error": err.Error()}
+		jsonResponse, _ := json.Marshal(response)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+		return
+	}
+
+	query := fmt.Sprintf("DELETE FROM t_todos WHERE id = %d", id)
+	if _, err := db.Exec(query); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		response := map[string]string{"error": err.Error()}
+		jsonResponse, _ := json.Marshal(response)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+		return
+	}
+
+	result := []res{
+		{Res: true},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		response := map[string]string{"error": err.Error()}
+		jsonResponse, _ := json.Marshal(response)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+		return
+	}
 }
 
 func main() {
@@ -88,8 +156,12 @@ func main() {
 	mux.HandleFunc("GET /todos/read", func(w http.ResponseWriter, r *http.Request) {
 		Read(w, r, db)
 	})
-	mux.HandleFunc("POST /todos/create", Create)
-	mux.HandleFunc("DELETE /todos/delete/{id}", Delete)
+	mux.HandleFunc("POST /todos/create", func(w http.ResponseWriter, r *http.Request) {
+		Create(w, r, db)
+	})
+	mux.HandleFunc("DELETE /todos/delete/{id}", func(w http.ResponseWriter, r *http.Request) {
+		Delete(w, r, db)
+	})
 
 	fmt.Println("Server running at port :5000")
 
